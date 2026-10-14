@@ -102,10 +102,10 @@ void anchor(int b, vec4 rnd, out vec2 P, out vec2 V, out float rad, out float co
   }
 }
 
-// About 30% of particles are core light: they stay on the body whatever the
+// About 40% of particles are core light: they stay on the body whatever the
 // mode, so the figure always reads. The rest are shed light and follow the
 // mode's rules (flow, fall, burst, freeze).
-bool isCore(vec2 uv) { return hash12(uv * 57.31 + 3.7) < 0.3; }
+bool isCore(vec2 uv) { return hash12(uv * 57.31 + 3.7) < 0.4; }
 
 vec4 particleRand(vec4 r0, float seed) {
   return fract(r0 + seed * vec4(1.6180339, 2.4142136, 3.3027756, 4.2360680) * 7.0);
@@ -253,7 +253,13 @@ void main() {
     // light go instead of dragging it across the screen in a straight line.
     if (length(T - pos) > S * 0.45) { rel += 25.0; vel *= exp(-12.0 * uDt); }
     bond = max(0.0, bond - rel * uDt);
-    acc += bond * ((T - pos) * uK + (TV - vel) * uC);
+    if (core) {
+      // Core light holds the figure: it tracks its anchor almost exactly, so
+      // the dancer stays sharp however fast the shed light is flying.
+      acc += bond * (TV + (T - pos) * 22.0 - vel) * 40.0;
+    } else {
+      acc += bond * ((T - pos) * uK + (TV - vel) * uC);
+    }
   }
   float freeF = 1.0 - bond;
 
@@ -379,6 +385,8 @@ uniform float uPx;       // world units per pixel
 uniform float uSize;     // particle width in pixels
 uniform float uStreak;   // seconds of motion a streak shows
 uniform float uGain;
+uniform float uCut;
+uniform float uBodyAlpha[${MAXB}];
 uniform float uBodyScale[${MAXB}];
 uniform float uBodyGain[${MAXB}];
 attribute vec2 ref;
@@ -436,7 +444,7 @@ void main() {
   // brightens as it leaves, which is what draws the trail.
   vec3 hp = fract(vec3(ref.xyx * 57.31 + 3.7) * 0.1031);
   hp += dot(hp, hp.yzx + 33.33);
-  bool core = fract((hp.x + hp.y) * hp.z) < 0.3;
+  bool core = fract((hp.x + hp.y) * hp.z) < 0.4;
   float base = core ? 0.6 : mix(0.85, 0.2, bond);
   // Shed light keeps its color (blue to violet) instead of going white, so a
   // flurry of motion reads as colored light around a white body.
@@ -446,8 +454,21 @@ void main() {
   // (drawn fresh on top every frame so the figure never smears).
   float onBody = core ? 1.0 : smoothstep(0.08, 0.4, bond);
   if (kind == 4.0) onBody = 0.0;
-  float layerW = LAYER == 1 ? onBody : 1.0 - onBody;
+  float layerW = LAYER == 0 ? 1.0 - onBody : onBody;
   if (layerW < 0.002) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  if (LAYER == 2) {
+    // Cutout: a wide soft dark blob per body particle, multiplied into the
+    // shed light, clears a quiet zone around the figure so it reads.
+    if (!core) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+    float cw = max(w * 6.0, bs * 0.3); // a margin about a limb's width
+    vHalf = 1.0;
+    world = p.xy + dir * position.x * cw * 0.5 + side * position.y * cw * 0.5;
+    gl_Position = vec4(world.x / uAspect, world.y, 0.0, 1.0);
+    // Fades with the body, so a body appearing or leaving never shows as a dark shape.
+    float ba = uBodyAlpha[int(kind) - 1];
+    vColor = vec3(uCut * fade * layerW * ba * ba);
+    return;
+  }
   vColor = palette(heat) * intensity * layerW * uGain * (kind < 4.0 ? uBodyGain[int(kind) - 1] : 1.0);
 }
 `;
@@ -542,7 +563,7 @@ export class ParticleField {
     geo.instanceCount = this.count;
     this.drawUniforms = {
       tPos: { value: null }, tVel: { value: null }, uAspect: this.uniforms.uAspect,
-      uPx: { value: 2 / 1080 }, uSize: { value: 2.2 }, uStreak: { value: 0.03 }, uGain: { value: 1 }, uBodyScale: this.uniforms.uScale, uBodyGain: { value: new Float32Array(MAXB) },
+      uPx: { value: 2 / 1080 }, uSize: { value: 2.2 }, uStreak: { value: 0.03 }, uGain: { value: 1 }, uCut: { value: 0.05 }, uBodyAlpha: this.uniforms.uAlpha, uBodyScale: this.uniforms.uScale, uBodyGain: { value: new Float32Array(MAXB) },
     };
     const layer = (n) => {
       const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({
@@ -554,6 +575,12 @@ export class ParticleField {
     };
     this.shedLayer = layer(0);
     this.bodyLayer = layer(1);
+    this.cutLayer = layer(2);
+    // dst = dst * (1 - src): darkens what is already there, adds nothing.
+    Object.assign(this.cutLayer.material, {
+      blending: THREE.CustomBlending, blendEquation: THREE.AddEquation,
+      blendSrc: THREE.ZeroFactor, blendDst: THREE.OneMinusSrcColorFactor,
+    });
     this.setMode(0);
   }
 
