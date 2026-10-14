@@ -34,8 +34,11 @@ URL options: `?video=<url>` autoloads a clip, `&mode=2` starts in a mode,
 ## How it works
 
 - **Tracking:** MediaPipe tasks-vision `PoseLandmarker` (the tasks API; the
-  legacy Pose solution is dead), GPU delegate, up to three bodies, One Euro
-  smoothing, stable slots matched by hip position (`src/pose.js`).
+  legacy Pose solution is dead), GPU delegate, running in a Web Worker so
+  tracking never costs a render frame (`src/pose-worker.js`). Up to three
+  bodies, One Euro smoothing, stable slots matched by hip position, duplicate
+  detections of one person merged, and a new body has to hold for a few
+  frames before it lights up (`src/pose.js`). `?worker=0` runs it on the main thread.
 - **Light:** a GPGPU particle system in Three.js (`src/particles.js`). Every
   particle is born bound to a point on the body (a spot on a limb capsule, the
   torso or the head) and rides it on a damped spring, so the light has mass
@@ -43,9 +46,14 @@ URL options: `?video=<url>` autoloads a clip, `&mode=2` starts in a mode,
   once free it joins a curl-noise flow field, gets dragged by limbs passing
   through it, and fades. Parts the tracker cannot see are not lit, and an
   anchor that jumps (a glitch, a video cut) lets its light go instead of
-  dragging it across the screen.
+  dragging it across the screen. About 30% of the particles are core light
+  that stays on the body in every mode, so the figure always reads; the rest
+  are shed light that follows the mode.
 - **Look:** additive velocity-stretched sprites into a half-float buffer,
   bloom, ACES tone mapping. One palette, white-hot body to violet memory.
+  Particles spread across each limb on a Gaussian (soft edges, no tubes), and
+  exposure follows each body's on-screen size so someone close to the camera
+  and someone far away read at the same brightness.
 
 ## Movement signal (for Body Band)
 
@@ -85,6 +93,10 @@ distance from the camera. Left and right are the dancer's own.
 npm install
 npm run dev          # http://localhost:5190
 npm run qa -- --clip shot --mode 1 --record 6   # real Chrome, GPU, writes qa/out/
+scripts/sheet.sh shot 1 mytag                   # record + contact sheet for worst-frame review
+node scripts/reel.mjs 8                         # every mode, 8 s each, qa/out/reel.webm
+node scripts/camtest.mjs                        # start screen + camera path on Chrome's fake camera
+node scripts/signalcheck.mjs tell               # movement signal ranges and hit count
 ```
 
 QA clips go in `qa/clips/` (gitignored, never committed).
