@@ -51,6 +51,7 @@ export class BodyUniforms {
     this.vis = new Float32Array(MAXB * NJ); // landmark confidence, eased
     this.scale = new Float32Array(MAXB); // torso length in world units
     this.alpha = new Float32Array(MAXB);
+    this.smoothFresh = [true, true, true];
     this.area = new Float32Array(MAXB); // on-screen body area, world units
     this.gain = new Float32Array(MAXB).fill(1); // exposure per body
     this.count = 0;
@@ -72,11 +73,11 @@ export class BodyUniforms {
     for (let b = 0; b < MAXB; b++) {
       const s = slots[b];
       this.alpha[b] = s.alpha;
-      if (s.alpha <= 0) { this.scale[b] = 0; continue; }
+      if (s.alpha <= 0) { this.scale[b] = 0; this.smoothFresh[b] = true; continue; }
       if (!s.active && this.scale[b] === 0) continue;
       this.count = b + 1;
       // Predict forward to this render frame (detections arrive at ~30 Hz).
-      const lead = s.active ? Math.min(0.05, Math.max(0, now - s.lastT)) : 0;
+      const lead = s.active ? Math.min(0.07, Math.max(0, now - s.lastT) + 0.02) : 0;
       const P = (i) => {
         const p = s.lm[i], v = s.vel[i];
         return [(p.x + v.x * lead - 0.5) * sx, (0.5 - (p.y + v.y * lead)) * h, v.x * sx, -v.y * h];
@@ -97,7 +98,7 @@ export class BodyUniforms {
         (d(lsh, P(13)) + d(rsh, P(14))) * 0.5 * 1.65,
       );
       const prevS = this.scale[b] || sizeNow;
-      const torso = Math.max(0.05, prevS + (sizeNow - prevS) * (1 - Math.exp(-dt / (sizeNow > prevS ? 0.25 : 2.5))));
+      const torso = Math.max(0.05, prevS + (sizeNow - prevS) * (1 - Math.exp(-dt / (sizeNow > prevS ? 0.2 : 0.7))));
       // Head center: midway between the ears, pulled toward the nose.
       const ears = avg(P(7), P(8));
       const nose = P(0);
@@ -108,8 +109,13 @@ export class BodyUniforms {
         // Clamp absurd velocities from tracking glitches.
         const sp = Math.hypot(v[2], v[3]);
         const k = sp > 6 ? 6 / sp : 1;
-        this.joints[base + j * 4] = v[0];
-        this.joints[base + j * 4 + 1] = v[1];
+        // Tracking lands at ~30 Hz; glide each joint toward its predicted spot
+        // so 60 fps motion has no steps (steps print as banding in the trail).
+        const o = base + j * 4;
+        const fresh = this.smoothFresh[b];
+        const glide = fresh ? 1 : 1 - Math.exp(-dt / 0.022);
+        this.joints[o] += (v[0] - this.joints[o]) * glide;
+        this.joints[o + 1] += (v[1] - this.joints[o + 1]) * glide;
         this.joints[base + j * 4 + 2] = v[2] * k;
         this.joints[base + j * 4 + 3] = v[3] * k;
         const raw = j === 0 ? Math.max(s.lm[0].visibility, (s.lm[7].visibility + s.lm[8].visibility) / 2)
@@ -118,6 +124,7 @@ export class BodyUniforms {
         this.vis[vi] += (raw - this.vis[vi]) * (1 - Math.exp(-dt / 0.12));
       }
       this.scale[b] = torso;
+      this.smoothFresh[b] = false;
       // Exposure: the same light spread over a bigger silhouette looks dimmer,
       // packed into a curled-up one it blows out. Brightness follows area.
       const J = (j) => [this.joints[base + j * 4], this.joints[base + j * 4 + 1]];

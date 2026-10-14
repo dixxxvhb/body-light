@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { TrailPass } from './trail.js';
 import { createDetector, BodyTracker } from './pose.js';
 import { BodyUniforms, MAXB } from './body.js';
 import { ParticleField, MODES } from './particles.js';
@@ -22,7 +23,10 @@ document.body.prepend(renderer.domElement);
 const scene = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const field = new ParticleField(renderer, Number(params.get('n')) || 512);
-scene.add(field.points);
+scene.add(field.shedLayer);
+// The body is drawn after the trail pass so it stays crisp.
+const bodyScene = new THREE.Scene();
+bodyScene.add(field.bodyLayer);
 const baseGain = num('gain', 0.3);
 
 // Optional faint video behind the light (B). Off by default.
@@ -46,7 +50,12 @@ scene.add(backdrop);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), num('bloom', 0.55), num('radius', 0.35), num('thresh', 0.55));
+const trail = new TrailPass(num('trail', 0.8));
+composer.addPass(trail);
+const bodyPass = new RenderPass(bodyScene, camera);
+bodyPass.clear = false;
+composer.addPass(bodyPass);
+const bloom = new UnrealBloomPass(new THREE.Vector2(512, 512), num('bloom', 0.45), num('radius', 0.35), num('thresh', 0.55));
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
@@ -238,6 +247,7 @@ function frame(now) {
   pendingHits.length = 0;
   field.step(dt, t);
   field.drawUniforms.uGain.value += (baseGain * field.modeGain - field.drawUniforms.uGain.value) * (1 - Math.exp(-dt / 0.5));
+  trail.dt = dt;
   composer.render(dt);
 
   if (document.body.classList.contains('debug') && stats.frames % 6 === 0) {

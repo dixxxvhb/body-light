@@ -188,6 +188,7 @@ uniform vec4 uHitDir[4];    // xy travel direction
 uniform float uHitKick;
 uniform float uHitRelease;
 uniform float uFreezeAge;   // aging rate of released light in freeze mode
+uniform float uAirDrag;     // speed-squared drag on free light
 `;
 
 const VEL_FRAG = COMMON + NOISE + SIM_UNIFORMS + /* glsl */ `
@@ -244,7 +245,7 @@ void main() {
     float limbSpeed = (length(TV - coreV) + 0.35 * length(coreV)) / S;
     bool core = isCore(vUv);
     float rel = core
-      ? 0.12 + 0.04 * limbSpeed * limbSpeed
+      ? 0.12 + 0.004 * limbSpeed * limbSpeed
       : uRelease * (0.6 + 0.8 * r0.y) + uReleaseSpeed * limbSpeed * limbSpeed * 0.25;
     if (uAlpha[b] < 0.6) rel += 3.0;
     if (conf < 0.45) rel += 4.0;
@@ -276,7 +277,7 @@ void main() {
         float d = length(pos - (A.xy + ab * t));
         float r = SEG_R[s] * S;
         float w = (1.0 - smoothstep(r, r * 5.0, d)) * smoothstep(0.4, 2.0, length(sv) / S);
-        acc += freeF * (sv - vel) * w * uWake;
+        acc += freeF * (sv * 1.35 - vel) * w * uWake;
       }
     }
   }
@@ -309,7 +310,7 @@ void main() {
 
   // Air drag grows with speed, so flung light decelerates into the flow
   // instead of flying off in a straight line.
-  acc -= freeF * vel * length(vel) * 1.6;
+  acc -= freeF * vel * length(vel) * uAirDrag;
   vel += acc * uDt;
   float sp = length(vel);
   float cap = mix(3.0, 8.0, bond);
@@ -342,6 +343,16 @@ void main() {
   }
   vec2 pos = p.xy + v.xy * uDt;
   float rate = 1.0;
+  // Bound light whose anchor jumped far away (a cut in the video, a tracking
+  // glitch) just goes out and is reborn on the body, instead of smearing.
+  if (kind >= 1.0 && kind <= 3.0 && v.z > 0.25) {
+    vec2 A, AV; float ar, ac;
+    anchor(int(kind) - 1, particleRand(r0, fract(v.w)), A, AV, ar, ac);
+    if (length(A - p.xy) > max(uScale[int(kind) - 1], 0.03) * 0.7) {
+      gl_FragColor = vec4(p.xy, p.w, p.w);
+      return;
+    }
+  }
   // Freeze: about half the light is allowed to hang in the air; the rest keeps
   // cycling so the body never runs out of particles.
   if (uMode == 3 && v.z < 0.3 && kind < 4.0 && r0.w < 0.5 && !isCore(vUv)) rate = uFreezeAge;
@@ -405,7 +416,10 @@ void main() {
   float bs = kind < 4.0 ? uBodyScale[int(kind) - 1] : 0.25;
   float near = clamp(bs / 0.25, 0.4, 3.0);
   float w = uSize * uPx * (kind == 4.0 ? 0.8 : clamp(sqrt(near), 0.8, 1.5));
-  float len = clamp(sp * uStreak, w, 0.035);
+  // Shed light draws a longer motion streak: the trail comes from the
+  // particle itself, so fast moves read as continuous ribbons, not copies.
+  float streak = LAYER == 0 ? uStreak * 2.6 : uStreak;
+  float len = clamp(sp * streak, w, LAYER == 0 ? 0.09 : 0.035);
   vHalf = len / w;
   vLocal = position.xy;
   vec2 side = vec2(-dir.y, dir.x);
@@ -414,18 +428,27 @@ void main() {
   gl_Position = vec4(world.x / uAspect, world.y, 0.0, 1.0);
 
   float bond = v.z;
-  float heat = kind == 4.0 ? 0.42 : 0.22 + bond * 0.5 + min(sp, 2.0) * 0.1 - t * 0.35;
+  float heat = kind == 4.0 ? 0.42 : 0.3 + bond * 0.45 + min(sp, 2.5) * 0.16 - t * 0.3;
   // Released light dims as it ages so the space keeps a trace, not a fog.
-  float freeDim = mix((1.0 - t) * (1.0 - t), 1.0, bond);
+  float freeDim = mix(1.0 - t, 1.0, bond);
   // Core light carries the figure at a steady brightness. Shed light is faint
   // while it still sits on the body (so a still dancer does not blow out) and
   // brightens as it leaves, which is what draws the trail.
   vec3 hp = fract(vec3(ref.xyx * 57.31 + 3.7) * 0.1031);
   hp += dot(hp, hp.yzx + 33.33);
   bool core = fract((hp.x + hp.y) * hp.z) < 0.3;
-  float base = core ? 0.6 : mix(0.68, 0.2, bond);
-  float intensity = (kind == 4.0 ? 0.4 : base * freeDim) * fade / pow(vHalf, 0.75);
-  vColor = palette(heat) * intensity * uGain * (kind < 4.0 ? uBodyGain[int(kind) - 1] : 1.0);
+  float base = core ? 0.6 : mix(0.85, 0.2, bond);
+  // Shed light keeps its color (blue to violet) instead of going white, so a
+  // flurry of motion reads as colored light around a white body.
+  if (!core) heat = min(heat, 0.6);
+  float intensity = (kind == 4.0 ? 0.4 : base * freeDim) * fade / pow(vHalf, LAYER == 0 ? 0.55 : 0.75);
+  // Two layers: shed light (drawn into the trail buffer) and body light
+  // (drawn fresh on top every frame so the figure never smears).
+  float onBody = core ? 1.0 : smoothstep(0.08, 0.4, bond);
+  if (kind == 4.0) onBody = 0.0;
+  float layerW = LAYER == 1 ? onBody : 1.0 - onBody;
+  if (layerW < 0.002) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
+  vColor = palette(heat) * intensity * layerW * uGain * (kind < 4.0 ? uBodyGain[int(kind) - 1] : 1.0);
 }
 `;
 
@@ -445,10 +468,10 @@ void main() {
 `;
 
 export const MODES = [
-  { name: 'Flow', release: 1.1, releaseSpeed: 0.55, K: 150, C: 15, flowAmp: 0.24, flowScale: 1.4, flowDrag: 1.6, wake: 7, gravity: 0, life: [1.5, 4.0], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
-  { name: 'Gravity', release: 0.9, releaseSpeed: 0.6, K: 150, C: 15, flowAmp: 0.08, flowScale: 1.4, flowDrag: 0.5, wake: 4, gravity: 1.5, life: [1.8, 3.6], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
-  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.55 },
-  { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.2 },
+  { name: 'Flow', release: 1.3, releaseSpeed: 0.8, K: 240, C: 20, flowAmp: 0.5, flowScale: 1.05, flowDrag: 1.4, wake: 10, airDrag: 0.7, gravity: 0, life: [1.5, 4.0], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
+  { name: 'Gravity', release: 1.0, releaseSpeed: 0.7, K: 240, C: 20, flowAmp: 0.08, flowScale: 1.4, flowDrag: 0.5, wake: 4, gravity: 1.5, life: [1.8, 3.6], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
+  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 260, C: 21, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.55 },
+  { name: 'Freeze', release: 0.9, releaseSpeed: 0.6, K: 240, C: 20, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.2 },
 ];
 
 export class ParticleField {
@@ -481,7 +504,7 @@ export class ParticleField {
       uLife: { value: new THREE.Vector2(1.4, 3.8) },
       uHit: { value: Array.from({ length: 4 }, () => new THREE.Vector4()) },
       uHitDir: { value: Array.from({ length: 4 }, () => new THREE.Vector4()) },
-      uHitKick: { value: 1 }, uHitRelease: { value: 3 }, uFreezeAge: { value: 1 },
+      uHitKick: { value: 1 }, uHitRelease: { value: 3 }, uFreezeAge: { value: 1 }, uAirDrag: { value: 1.6 },
     };
     const mat = (frag) => new THREE.ShaderMaterial({ uniforms: this.uniforms, vertexShader: SIM_VERT, fragmentShader: frag, depthTest: false, depthWrite: false });
     this.velMat = mat(VEL_FRAG);
@@ -521,11 +544,16 @@ export class ParticleField {
       tPos: { value: null }, tVel: { value: null }, uAspect: this.uniforms.uAspect,
       uPx: { value: 2 / 1080 }, uSize: { value: 2.2 }, uStreak: { value: 0.03 }, uGain: { value: 1 }, uBodyScale: this.uniforms.uScale, uBodyGain: { value: new Float32Array(MAXB) },
     };
-    this.points = new THREE.Mesh(geo, new THREE.ShaderMaterial({
-      uniforms: this.drawUniforms, vertexShader: DRAW_VERT, fragmentShader: DRAW_FRAG,
-      blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
-    }));
-    this.points.frustumCulled = false;
+    const layer = (n) => {
+      const m = new THREE.Mesh(geo, new THREE.ShaderMaterial({
+        uniforms: this.drawUniforms, vertexShader: DRAW_VERT, fragmentShader: DRAW_FRAG, defines: { LAYER: n },
+        blending: THREE.AdditiveBlending, depthTest: false, depthWrite: false, transparent: true,
+      }));
+      m.frustumCulled = false;
+      return m;
+    };
+    this.shedLayer = layer(0);
+    this.bodyLayer = layer(1);
     this.setMode(0);
   }
 
@@ -541,6 +569,7 @@ export class ParticleField {
     u.uLife.value.set(m.life[0], m.life[1]);
     u.uHitKick.value = m.hitKick; u.uHitRelease.value = m.hitRelease;
     u.uSpawn.value = m.spawn; u.uFreezeAge.value = m.freezeAge;
+    u.uAirDrag.value = m.airDrag ?? 1.6;
     this.modeGain = m.gain ?? 1;
   }
 

@@ -81,7 +81,7 @@ export function createDetector({ model = 'full', maxBodies = 3, useWorker = true
 // One Euro filter: smooth when slow, responsive when fast. Tuned for 30 fps
 // landmark input in normalized image coords.
 class OneEuro {
-  constructor(minCutoff = 1.6, beta = 12, dCutoff = 1.2) {
+  constructor(minCutoff = 2.6, beta = 20, dCutoff = 1.2) {
     this.minCutoff = minCutoff; this.beta = beta; this.dCutoff = dCutoff;
     this.x = null; this.dx = 0;
   }
@@ -125,7 +125,7 @@ class BodySlot {
       const p = this.lm[i];
       if (this.active) {
         // Velocity eased so a single noisy detection cannot fling particles.
-        const k = 1 - Math.exp(-dt / 0.06);
+        const k = 1 - Math.exp(-dt / 0.04);
         this.vel[i].x += ((x - p.x) / dt - this.vel[i].x) * k;
         this.vel[i].y += ((y - p.y) / dt - this.vel[i].y) * k;
       } else {
