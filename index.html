@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Body Light</title>
+<style>
+  :root {
+    --ink: #f4f5f8;
+    --dim: rgba(244, 245, 248, 0.55);
+    --faint: rgba(244, 245, 248, 0.14);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; background: #000; color: var(--ink); overflow: hidden; }
+  body { font: 400 13px/1.4 ui-sans-serif, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; letter-spacing: 0.02em; }
+  canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; }
+  body.idle, body.idle * { cursor: none !important; }
+
+  #start {
+    position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: 32px;
+    transition: opacity 0.6s;
+  }
+  #start h1 { font: 200 56px/1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif; letter-spacing: 0.14em; text-transform: uppercase; }
+  #start .row { display: flex; gap: 12px; }
+  #start button {
+    font: inherit; font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink);
+    background: transparent; border: 1px solid var(--faint); border-radius: 999px; padding: 12px 24px; cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+  }
+  #start button:hover, #start button:focus-visible { border-color: var(--dim); background: rgba(255, 255, 255, 0.04); outline: none; }
+  #start p { color: var(--dim); font-size: 12px; }
+  #start.gone { opacity: 0; pointer-events: none; }
+
+  #bar {
+    position: fixed; left: 24px; right: 24px; bottom: 20px; display: flex; justify-content: space-between; align-items: baseline;
+    color: var(--dim); font-size: 12px; letter-spacing: 0.08em; transition: opacity 0.8s; pointer-events: none;
+  }
+  #bar b { color: var(--ink); font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; margin-right: 16px; }
+  #bar kbd { font: inherit; color: var(--ink); margin-right: 4px; }
+  #bar span + span { margin-left: 16px; }
+  body.idle #bar, body.hidden #bar, body.hidden #debug { opacity: 0; }
+
+  #debug {
+    position: fixed; top: 16px; left: 24px; font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--dim);
+    white-space: pre; pointer-events: none; display: none;
+  }
+  body.debug #debug { display: block; }
+
+  #drop { position: fixed; inset: 16px; border: 1px dashed var(--dim); border-radius: 12px; display: none; pointer-events: none; }
+  body.dragging #drop { display: block; }
+  #msg { position: fixed; top: 20px; right: 24px; color: var(--dim); font-size: 12px; transition: opacity 0.6s; opacity: 0; pointer-events: none; }
+  #msg.on { opacity: 1; }
+</style>
+</head>
+<body>
+  <div id="start">
+    <h1>Body Light</h1>
+    <div class="row">
+      <button id="btn-cam">Camera</button>
+      <button id="btn-file">Video file</button>
+    </div>
+    <p>or drop a video anywhere</p>
+  </div>
+  <div id="bar">
+    <div><b id="mode-name">Flow</b><span id="keys"><kbd>1</kbd>Flow <kbd>2</kbd>Gravity <kbd>3</kbd>Burst <kbd>4</kbd>Freeze</span></div>
+    <div><span><kbd>F</kbd>Fullscreen</span><span><kbd>H</kbd>Hide</span><span><kbd>C</kbd>Camera</span><span><kbd>V</kbd>Video</span></div>
+  </div>
+  <div id="debug"></div>
+  <div id="drop"></div>
+  <div id="msg"></div>
+  <input id="file" type="file" accept="video/*" hidden />
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
