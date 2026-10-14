@@ -296,12 +296,12 @@ void main() {
 
   if (uMode == 1) {
     acc.y -= uGravity * freeF;
-    if (pos.y <= uFloor + 0.002 && vel.y < 0.0) {
+    if (bond < 0.5 && pos.y <= uFloor + 0.002 && vel.y < 0.0) {
       vel.y = -vel.y * (0.25 + 0.2 * r0.z);
       vel.x *= 0.7;
     }
   }
-  if (uMode == 3 && freeF > 0.5) {
+  if (uMode == 3 && freeF > 0.5 && r0.w < 0.5) {
     // Freeze: released light coasts to a stop and hangs where it was left.
     vel *= exp(-5.0 * uDt * freeF);
     acc *= 1.0 - freeF;
@@ -341,9 +341,13 @@ void main() {
   }
   vec2 pos = p.xy + v.xy * uDt;
   float rate = 1.0;
-  if (uMode == 3 && v.z < 0.3 && kind < 4.0) rate = uFreezeAge;
+  // Freeze: about half the light is allowed to hang in the air; the rest keeps
+  // cycling so the body never runs out of particles.
+  if (uMode == 3 && v.z < 0.3 && kind < 4.0 && r0.w < 0.5) rate = uFreezeAge;
   float age = p.z + uDt * rate;
-  if (uMode == 1 && pos.y < uFloor) pos.y = uFloor;
+  // Free light lands on the floor when it falls through it; light already
+  // below a floor that has since risen just keeps falling.
+  if (uMode == 1 && v.z < 0.5 && p.y >= uFloor - 0.001 && pos.y < uFloor) pos.y = uFloor;
   if (abs(pos.x) > uAspect * 1.25 || abs(pos.y) > 1.3) age = p.w;
   gl_FragColor = vec4(pos, age, p.w);
 }
@@ -433,9 +437,9 @@ void main() {
 
 export const MODES = [
   { name: 'Flow', release: 1.1, releaseSpeed: 0.55, K: 150, C: 15, flowAmp: 0.24, flowScale: 1.4, flowDrag: 1.6, wake: 7, gravity: 0, life: [1.3, 3.4], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
-  { name: 'Gravity', release: 0.75, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.05, flowScale: 1.4, flowDrag: 0.35, wake: 4, gravity: 2.6, life: [2.5, 6.0], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
-  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1 },
-  { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 0.35, freezeAge: 0.09 },
+  { name: 'Gravity', release: 0.9, releaseSpeed: 0.6, K: 150, C: 15, flowAmp: 0.08, flowScale: 1.4, flowDrag: 0.5, wake: 4, gravity: 1.5, life: [1.8, 3.6], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
+  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.7 },
+  { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.12 },
 ];
 
 export class ParticleField {
@@ -528,6 +532,7 @@ export class ParticleField {
     u.uLife.value.set(m.life[0], m.life[1]);
     u.uHitKick.value = m.hitKick; u.uHitRelease.value = m.hitRelease;
     u.uSpawn.value = m.spawn; u.uFreezeAge.value = m.freezeAge;
+    this.modeGain = m.gain ?? 1;
   }
 
   resize(width, height, aspect) {

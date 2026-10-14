@@ -3,7 +3,7 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
-import { createLandmarker, BodyTracker } from './pose.js';
+import { createDetector, BodyTracker } from './pose.js';
 import { BodyUniforms, MAXB } from './body.js';
 import { ParticleField, MODES } from './particles.js';
 import { MovementSignal, broadcastSignal } from './signal.js';
@@ -23,7 +23,7 @@ const scene = new THREE.Scene();
 const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const field = new ParticleField(renderer, Number(params.get('n')) || 512);
 scene.add(field.points);
-field.drawUniforms.uGain.value = num('gain', 0.3);
+const baseGain = num('gain', 0.3);
 
 // Optional faint video behind the light (B). Off by default.
 const video = document.createElement('video');
@@ -72,13 +72,42 @@ const signals = Array.from({ length: MAXB }, () => new MovementSignal());
 // The exported signal follows whichever body was seen most recently.
 const signal = new MovementSignal();
 broadcastSignal(signal);
-let landmarker = null;
-let landmarkerPromise = null;
-const loadLandmarker = () => (landmarkerPromise ||= createLandmarker({ model: params.get('model') || 'full', maxBodies: Number(params.get('bodies')) || MAXB }).then((l) => (landmarker = l)));
+const pendingHits = [];
+let detector = null;
+const loadDetector = () => {
+  if (detector) return detector.ready;
+  detector = createDetector({
+    model: params.get('model') || 'full',
+    maxBodies: Number(params.get('bodies')) || MAXB,
+    useWorker: params.get('worker') !== '0',
+    onResult: onPoses,
+  });
+  return detector.ready;
+};
+
+function toWorld(x, y) {
+  const { w, h, mirror } = bodyU.view;
+  return [(x - 0.5) * (mirror ? -w : w), (0.5 - y) * h];
+}
+
+function onPoses(landmarks, t) {
+  stats.detections++;
+  tracker.update(landmarks, t);
+  const now = t * 1000;
+  tracker.slots.forEach((s, i) => {
+    const f = signals[i].update(s.active ? s.lm : null, now);
+    if (s.alpha < 0.3) return;
+    for (const h of f.hits) {
+      const [x, y] = toWorld(h.x, h.y);
+      const scale = bodyU.scale[i] || 0.4;
+      pendingHits.push({ x, y, dx: h.dx * (bodyU.view.mirror ? -1 : 1), dy: -h.dy, strength: h.strength, radius: scale * 0.55 });
+    }
+  });
+  signal.update(tracker.primary()?.lm || null, now);
+}
 
 let source = null; // { kind, w, h, mirror }
 let newFrame = false;
-let lastTs = 0;
 let stream = null;
 
 function watchFrames() {
@@ -96,7 +125,7 @@ function updateBackdropRect() {
 
 async function useVideo(src, kind, mirror) {
   flash(kind === 'camera' ? 'Starting camera' : 'Loading video');
-  loadLandmarker();
+  const detectorReady = loadDetector();
   if (stream && kind !== 'camera') { stream.getTracks().forEach((t) => t.stop()); stream = null; }
   video.pause();
   if (kind === 'camera') { video.srcObject = src; video.removeAttribute('src'); } else { video.srcObject = null; video.src = src; }
@@ -106,7 +135,7 @@ async function useVideo(src, kind, mirror) {
   await video.play().catch(() => { video.muted = true; return video.play(); });
   source = { kind, w: video.videoWidth, h: video.videoHeight, mirror };
   resize();
-  await landmarkerPromise;
+  await detectorReady;
   $('start').classList.add('gone');
   flash('');
 }
@@ -177,13 +206,6 @@ if (params.has('debug')) document.body.classList.add('debug');
 const stats = { fps: 60, frameMs: 16.7, worstMs: 0, detectMs: 0, detections: 0, frames: 0 };
 let last = performance.now();
 let worstWindow = 0, worstAt = 0;
-const pendingHits = [];
-
-function toWorld(x, y) {
-  const { w, h, mirror } = bodyU.view;
-  return [(x - 0.5) * (mirror ? -w : w), (0.5 - y) * h];
-}
-
 function frame(now) {
   requestAnimationFrame(frame);
   const rawDt = (now - last) / 1000;
@@ -197,25 +219,11 @@ function frame(now) {
   worstWindow = Math.max(worstWindow, rawDt * 1000);
   if (now - worstAt > 2000) { stats.worstMs = worstWindow; worstWindow = 0; worstAt = now; }
 
-  if (landmarker && source && video.readyState >= 2 && (newFrame || !('requestVideoFrameCallback' in video))) {
+  if (detector && source && video.readyState >= 2 && !detector.busy && (newFrame || !('requestVideoFrameCallback' in video))) {
     newFrame = false;
-    const ts = Math.max(lastTs + 1, now);
-    lastTs = ts;
-    const t0 = performance.now();
-    const res = landmarker.detectForVideo(video, ts);
-    stats.detectMs += (performance.now() - t0 - stats.detectMs) * 0.1;
-    stats.detections++;
-    tracker.update(res.landmarks, t);
-    tracker.slots.forEach((s, i) => {
-      const f = signals[i].update(s.active ? s.lm : null, now);
-      for (const h of f.hits) {
-        const [x, y] = toWorld(h.x, h.y);
-        const scale = bodyU.scale[i] || 0.4;
-        pendingHits.push({ x, y, dx: h.dx * (bodyU.view.mirror ? -1 : 1), dy: -h.dy, strength: h.strength, radius: scale * 0.55 });
-      }
-    });
-    signal.update(tracker.primary()?.lm || null, now);
+    detector.submit(video, now);
   }
+  stats.detectMs = detector?.stats.ms || 0;
 
   tracker.tick(dt);
   bodyU.update(tracker.slots, t, dt);
@@ -224,6 +232,7 @@ function frame(now) {
   field.setHits(pendingHits.splice(0, 4));
   pendingHits.length = 0;
   field.step(dt, t);
+  field.drawUniforms.uGain.value += (baseGain * field.modeGain - field.drawUniforms.uGain.value) * (1 - Math.exp(-dt / 0.5));
   composer.render(dt);
 
   if (document.body.classList.contains('debug') && stats.frames % 6 === 0) {

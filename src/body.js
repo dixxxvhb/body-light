@@ -35,6 +35,7 @@ export class BodyUniforms {
       const s = slots[b];
       this.alpha[b] = s.alpha;
       if (s.alpha <= 0) { this.scale[b] = 0; continue; }
+      if (!s.active && this.scale[b] === 0) continue;
       this.count = b + 1;
       // Predict forward to this render frame (detections arrive at ~30 Hz).
       const lead = s.active ? Math.min(0.05, Math.max(0, now - s.lastT)) : 0;
@@ -46,7 +47,19 @@ export class BodyUniforms {
       const lsh = P(11), rsh = P(12), lhip = P(23), rhip = P(24);
       const neck = avg(lsh, rsh);
       const hipC = avg(lhip, rhip);
-      const torso = Math.max(0.05, Math.hypot(neck[0] - hipC[0], neck[1] - hipC[1]));
+      // Body size. The torso alone collapses when someone folds over or lies
+      // down (it points at the camera), so take the largest of several bones,
+      // each scaled to torso units, and let it shrink only slowly.
+      const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+      const sizeNow = Math.max(
+        d(neck, hipC),
+        d(lsh, rsh) * 1.35,
+        (d(lhip, P(25)) + d(rhip, P(26))) * 0.5 * 1.1,
+        (d(P(25), P(27)) + d(P(26), P(28))) * 0.5 * 1.15,
+        (d(lsh, P(13)) + d(rsh, P(14))) * 0.5 * 1.65,
+      );
+      const prevS = this.scale[b] || sizeNow;
+      const torso = Math.max(0.05, prevS + (sizeNow - prevS) * (1 - Math.exp(-dt / (sizeNow > prevS ? 0.25 : 2.5))));
       // Head center: midway between the ears, pulled toward the nose.
       const ears = avg(P(7), P(8));
       const nose = P(0);
@@ -68,12 +81,14 @@ export class BodyUniforms {
       }
       this.scale[b] = torso;
       if (s.active) {
-        lowest = Math.min(lowest, P(31)[1], P(32)[1], P(27)[1], P(28)[1]);
+        // Floor sits under the lowest visible part of the body, not just the
+        // feet: on the ground the hands, hips or head can be lowest.
+        for (let j = 0; j < NJ; j++) if (this.vis[b * NJ + j] > 0.5) lowest = Math.min(lowest, this.joints[base + j * 4 + 1]);
       }
     }
     // Floor for gravity mode: just under the lowest foot, slow to rise.
-    const target = Number.isFinite(lowest) ? lowest - 0.02 : -0.92;
-    const tau = target < this.floor ? 0.15 : 1.5;
+    const target = Number.isFinite(lowest) ? Math.max(-0.98, lowest - 0.04) : -0.92;
+    const tau = target < this.floor ? 0.15 : 6;
     this.floor += (target - this.floor) * (1 - Math.exp(-dt / tau));
   }
 }

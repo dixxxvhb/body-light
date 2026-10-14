@@ -103,8 +103,14 @@ export class MovementSignal {
 
     const shC = mid(lm[IDX.lSh], lm[IDX.rSh]);
     const hipC = mid(lm[IDX.lHip], lm[IDX.rHip]);
-    const torsoNow = Math.max(1e-3, dist(shC, hipC));
-    this.torso = this.torso ? ease(this.torso, torsoNow, dt, 0.5) : torsoNow;
+    // Body size in torso units, robust to folding over or lying down (the
+    // torso alone shrinks when it points at the camera).
+    const torsoNow = Math.max(1e-3,
+      dist(shC, hipC),
+      dist(lm[IDX.lSh], lm[IDX.rSh]) * 1.35,
+      (dist(lm[IDX.lHip], lm[IDX.lKnee]) + dist(lm[IDX.rHip], lm[IDX.rKnee])) * 0.55,
+      (dist(lm[IDX.lKnee], lm[IDX.lAnk]) + dist(lm[IDX.rKnee], lm[IDX.rAnk])) * 0.575);
+    this.torso = this.torso ? ease(this.torso, torsoNow, dt, torsoNow > this.torso ? 0.25 : 2.5) : torsoNow;
     const T = this.torso;
 
     const hits = [];
