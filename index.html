@@ -39,7 +39,9 @@
   #bar b { color: var(--ink); font-weight: 500; letter-spacing: 0.16em; text-transform: uppercase; margin-right: 16px; }
   #bar kbd { font: inherit; color: var(--ink); margin-right: 4px; }
   #bar span + span { margin-left: 16px; }
-  body.idle #bar, body.hidden #bar, body.hidden #debug { opacity: 0; }
+  body.idle #bar, body.hidden #bar, body.hidden #debug, body.waiting #bar { opacity: 0; }
+  #hint { position: fixed; left: 0; right: 0; bottom: 56px; text-align: center; color: var(--dim); font-size: 13px; letter-spacing: 0.08em; opacity: 0; transition: opacity 1.2s; pointer-events: none; }
+  body.nobody:not(.hidden) #hint { opacity: 1; }
 
   #debug {
     position: fixed; top: 16px; left: 24px; font: 11px/1.5 ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--dim);
@@ -53,7 +55,7 @@
   #msg.on { opacity: 1; }
 </style>
 </head>
-<body>
+<body class="waiting">
   <div id="start">
     <h1>Body Light</h1>
     <div class="row">
@@ -66,6 +68,7 @@
     <div><b id="mode-name">Flow</b><span id="keys"><kbd>1</kbd>Flow <kbd>2</kbd>Gravity <kbd>3</kbd>Burst <kbd>4</kbd>Freeze</span></div>
     <div><span><kbd>F</kbd>Fullscreen</span><span><kbd>H</kbd>Hide</span><span><kbd>C</kbd>Camera</span><span><kbd>V</kbd>Video</span></div>
   </div>
+  <div id="hint">Step back so the camera sees all of you</div>
   <div id="debug"></div>
   <div id="drop"></div>
   <div id="msg"></div>

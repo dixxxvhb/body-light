@@ -9,7 +9,7 @@ for (let i = 0; i < 24; i++) {
     const { tracker, video, bodyU, field } = window.bodyLight;
     const s = tracker.slots[0];
     const vis = Array.from(bodyU.vis.slice(0, 18)).map(v => v.toFixed(1)).join(' ');
-    return `${video.currentTime.toFixed(2)} a=${bodyU.alpha[0].toFixed(2)} n=${bodyU.count} S=${bodyU.scale[0].toFixed(2)} floor=${bodyU.floor.toFixed(2)} hipY=${bodyU.joints[10*4+1].toFixed(2)} vis=[${vis}]`;
+    return `${video.currentTime.toFixed(2)} a=${bodyU.alpha[0].toFixed(2)} n=${bodyU.count} S=${bodyU.scale[0].toFixed(2)} floor=${bodyU.floor.toFixed(2)} area=${bodyU.area[0].toFixed(3)} gain=${bodyU.gain[0].toFixed(2)} hipY=${bodyU.joints[10*4+1].toFixed(2)} vis=[${vis}]`;
   }));
   await p.waitForTimeout(250);
 }

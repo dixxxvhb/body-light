@@ -5,23 +5,8 @@
 // faster; still limbs keep it. Released light is stirred by limbs that pass
 // through it, so the space keeps a memory of where the body was.
 import * as THREE from 'three';
-import { MAXB, NJ } from './body.js';
+import { MAXB, NJ, SEGS } from './body.js';
 
-// Body segments: [jointA, jointB, radius (x torso length), share of particles].
-// Segment 0 is the torso quad and segment 1 is the head disc (handled apart).
-// Shares roughly follow each part's area so the body glows evenly; hands and
-// feet get a little extra because the eye follows them.
-const SEGS = [
-  [-1, -1, 0.14, 0.27], // torso
-  [-1, -1, 0.19, 0.055], // head
-  [1, 0, 0.08, 0.012], // neck
-  [2, 4, 0.10, 0.05], [3, 5, 0.10, 0.05], // upper arms
-  [4, 6, 0.085, 0.042], [5, 7, 0.085, 0.042], // forearms
-  [6, 8, 0.075, 0.028], [7, 9, 0.075, 0.028], // hands
-  [10, 12, 0.15, 0.10], [11, 13, 0.15, 0.10], // thighs
-  [12, 14, 0.105, 0.075], [13, 15, 0.105, 0.075], // shins
-  [14, 16, 0.07, 0.028], [15, 17, 0.07, 0.028], // feet
-];
 const NSEG = SEGS.length;
 const shareSum = SEGS.reduce((a, s) => a + s[3], 0);
 let cum = 0;
@@ -109,6 +94,11 @@ void anchor(int b, vec4 rnd, out vec2 P, out vec2 V, out float rad, out float co
     conf = min(uVis[base + SEG_A[seg]], uVis[base + SEG_B[seg]]);
   }
 }
+
+// About 30% of particles are core light: they stay on the body whatever the
+// mode, so the figure always reads. The rest are shed light and follow the
+// mode's rules (flow, fall, burst, freeze).
+bool isCore(vec2 uv) { return hash12(uv * 57.31 + 3.7) < 0.3; }
 
 vec4 particleRand(vec4 r0, float seed) {
   return fract(r0 + seed * vec4(1.6180339, 2.4142136, 3.3027756, 4.2360680) * 7.0);
@@ -245,7 +235,10 @@ void main() {
     // (the whole body moving) sheds much less, so a run does not dissolve you.
     vec2 coreV = (uJ[b * NJ + 10].zw + uJ[b * NJ + 11].zw) * 0.5;
     float limbSpeed = (length(TV - coreV) + 0.35 * length(coreV)) / S;
-    float rel = uRelease * (0.6 + 0.8 * r0.y) + uReleaseSpeed * limbSpeed * limbSpeed * 0.25;
+    bool core = isCore(vUv);
+    float rel = core
+      ? 0.12 + 0.04 * limbSpeed * limbSpeed
+      : uRelease * (0.6 + 0.8 * r0.y) + uReleaseSpeed * limbSpeed * limbSpeed * 0.25;
     if (uAlpha[b] < 0.6) rel += 3.0;
     if (conf < 0.45) rel += 4.0;
     // If the anchor jumped (a tracking glitch, a cut in the video), let the
@@ -301,7 +294,7 @@ void main() {
       vel.x *= 0.7;
     }
   }
-  if (uMode == 3 && freeF > 0.5 && r0.w < 0.5) {
+  if (uMode == 3 && freeF > 0.5 && r0.w < 0.5 && !isCore(vUv)) {
     // Freeze: released light coasts to a stop and hangs where it was left.
     vel *= exp(-5.0 * uDt * freeF);
     acc *= 1.0 - freeF;
@@ -329,7 +322,8 @@ void main() {
     if (kind >= 1.0 && kind <= 3.0) {
       vec2 P, V; float rad, conf;
       anchor(int(kind) - 1, particleRand(r0, fract(v.w)), P, V, rad, conf);
-      float life = mix(uLife.x, uLife.y, pow(hash12(vUv * 77.7 + fract(uTime) * 9.1), 1.5));
+      float h = pow(hash12(vUv * 77.7 + fract(uTime) * 9.1), 1.5);
+      float life = isCore(vUv) ? mix(0.7, 1.6, h) : mix(uLife.x, uLife.y, h);
       gl_FragColor = vec4(P, 0.0, life);
     } else if (kind == 4.0) {
       vec4 h = hash42(vUv * 13.1 + fract(uTime * 0.31) * 51.0);
@@ -343,7 +337,7 @@ void main() {
   float rate = 1.0;
   // Freeze: about half the light is allowed to hang in the air; the rest keeps
   // cycling so the body never runs out of particles.
-  if (uMode == 3 && v.z < 0.3 && kind < 4.0 && r0.w < 0.5) rate = uFreezeAge;
+  if (uMode == 3 && v.z < 0.3 && kind < 4.0 && r0.w < 0.5 && !isCore(vUv)) rate = uFreezeAge;
   float age = p.z + uDt * rate;
   // Free light lands on the floor when it falls through it; light already
   // below a floor that has since risen just keeps falling.
@@ -368,6 +362,7 @@ uniform float uSize;     // particle width in pixels
 uniform float uStreak;   // seconds of motion a streak shows
 uniform float uGain;
 uniform float uBodyScale[${MAXB}];
+uniform float uBodyGain[${MAXB}];
 attribute vec2 ref;
 varying vec2 vLocal;
 varying float vHalf;
@@ -412,11 +407,18 @@ void main() {
   gl_Position = vec4(world.x / uAspect, world.y, 0.0, 1.0);
 
   float bond = v.z;
-  float heat = 0.22 + bond * 0.5 + min(sp, 2.0) * 0.1 - t * 0.35;
+  float heat = kind == 4.0 ? 0.42 : 0.22 + bond * 0.5 + min(sp, 2.0) * 0.1 - t * 0.35;
   // Released light dims as it ages so the space keeps a trace, not a fog.
   float freeDim = mix((1.0 - t) * (1.0 - t), 1.0, bond);
-  float intensity = (kind == 4.0 ? 0.12 : (0.4 + bond * 0.35) * freeDim) * fade / pow(vHalf, 0.75);
-  vColor = palette(heat) * intensity * uGain * clamp(near, 0.55, 1.8);
+  // Core light carries the figure at a steady brightness. Shed light is faint
+  // while it still sits on the body (so a still dancer does not blow out) and
+  // brightens as it leaves, which is what draws the trail.
+  vec3 hp = fract(vec3(ref.xyx * 57.31 + 3.7) * 0.1031);
+  hp += dot(hp, hp.yzx + 33.33);
+  bool core = fract((hp.x + hp.y) * hp.z) < 0.3;
+  float base = core ? 0.6 : mix(0.5, 0.2, bond);
+  float intensity = (kind == 4.0 ? 0.4 : base * freeDim) * fade / pow(vHalf, 0.75);
+  vColor = palette(heat) * intensity * uGain * (kind < 4.0 ? uBodyGain[int(kind) - 1] : 1.0);
 }
 `;
 
@@ -439,7 +441,7 @@ export const MODES = [
   { name: 'Flow', release: 1.1, releaseSpeed: 0.55, K: 150, C: 15, flowAmp: 0.24, flowScale: 1.4, flowDrag: 1.6, wake: 7, gravity: 0, life: [1.3, 3.4], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
   { name: 'Gravity', release: 0.9, releaseSpeed: 0.6, K: 150, C: 15, flowAmp: 0.08, flowScale: 1.4, flowDrag: 0.5, wake: 4, gravity: 1.5, life: [1.8, 3.6], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
   { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.7 },
-  { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.12 },
+  { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.2 },
 ];
 
 export class ParticleField {
@@ -510,7 +512,7 @@ export class ParticleField {
     geo.instanceCount = this.count;
     this.drawUniforms = {
       tPos: { value: null }, tVel: { value: null }, uAspect: this.uniforms.uAspect,
-      uPx: { value: 2 / 1080 }, uSize: { value: 2.2 }, uStreak: { value: 0.03 }, uGain: { value: 1 }, uBodyScale: this.uniforms.uScale,
+      uPx: { value: 2 / 1080 }, uSize: { value: 2.2 }, uStreak: { value: 0.03 }, uGain: { value: 1 }, uBodyScale: this.uniforms.uScale, uBodyGain: { value: new Float32Array(MAXB) },
     };
     this.points = new THREE.Mesh(geo, new THREE.ShaderMaterial({
       uniforms: this.drawUniforms, vertexShader: DRAW_VERT, fragmentShader: DRAW_FRAG,
@@ -547,6 +549,7 @@ export class ParticleField {
     this.uniforms.uScale.value.set(bu.scale);
     this.uniforms.uAlpha.value.set(bu.alpha);
     this.uniforms.uVis.value.set(bu.vis);
+    this.drawUniforms.uBodyGain.value.set(bu.gain);
     this.uniforms.uCount.value = bu.count;
     this.uniforms.uFloor.value = bu.floor;
   }

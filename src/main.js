@@ -73,6 +73,7 @@ const signals = Array.from({ length: MAXB }, () => new MovementSignal());
 const signal = new MovementSignal();
 broadcastSignal(signal);
 const pendingHits = [];
+let lastBodyAt = performance.now();
 let detector = null;
 const loadDetector = () => {
   if (detector) return detector.ready;
@@ -137,6 +138,7 @@ async function useVideo(src, kind, mirror) {
   resize();
   await detectorReady;
   $('start').classList.add('gone');
+  document.body.classList.remove('waiting');
   flash('');
 }
 
@@ -226,6 +228,9 @@ function frame(now) {
   stats.detectMs = detector?.stats.ms || 0;
 
   tracker.tick(dt);
+  // Nobody in frame for a few seconds: a quiet nudge (camera only).
+  if (tracker.primary()) lastBodyAt = now;
+  document.body.classList.toggle('nobody', source?.kind === 'camera' && now - lastBodyAt > 4000);
   bodyU.update(tracker.slots, t, dt);
   field.setBodies(bodyU);
   pendingHits.sort((a, b) => b.strength - a.strength);
