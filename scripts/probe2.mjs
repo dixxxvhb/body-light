@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 const [clip = 'cavalier', q = ''] = process.argv.slice(2);
 const b = await chromium.launch({ channel: 'chrome', args: ['--enable-gpu','--ignore-gpu-blocklist','--use-angle=d3d11','--autoplay-policy=no-user-gesture-required'] });
 const p = await b.newPage({ viewport: { width: 1280, height: 720 } });
-await p.goto(`http://localhost:5190/?qa&ui=0&mute=1&mode=2&video=/qa/clips/${clip}.mp4&${q}`);
+await p.goto(`http://localhost:5190/?qa&ui=0&mute=1&video=/qa/clips/${clip}.mp4&${q}`);
 await p.waitForFunction(() => window.bodyLight?.stats.detections > 5, null, { timeout: 60000 });
 for (let i = 0; i < 24; i++) {
   console.log(await p.evaluate(() => {

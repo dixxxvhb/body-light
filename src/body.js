@@ -132,10 +132,11 @@ export class BodyUniforms {
       const pad = 0.1 * torso;
       area = Math.min(area, hullA + hullP * pad + Math.PI * pad * pad);
       this.area[b] += (area - this.area[b]) * (1 - Math.exp(-dt / 0.3));
-      // Particles already widen with body size (see the draw shader), which
-      // covers part of the area on its own; divide that back out.
+      // Particles already widen with body size (see the draw shader). Bloom
+      // sums all the light, so a big bright body also throws a bigger halo:
+      // follow area only by its square root and divide the widening back out.
       const widen = Math.min(1.5, Math.max(0.8, Math.sqrt(torso / 0.25)));
-      this.gain[b] = Math.min(2.5, Math.max(0.35, this.area[b] / AREA_REF / (widen * widen)));
+      this.gain[b] = Math.min(2, Math.max(0.35, Math.sqrt(this.area[b] / AREA_REF) / (widen * widen)));
       if (s.active) {
         // Floor sits under the lowest visible part of the body, not just the
         // feet: on the ground the hands, hips or head can be lowest.
