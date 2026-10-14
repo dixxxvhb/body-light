@@ -254,7 +254,7 @@ resize();
 requestAnimationFrame(frame);
 
 // Handle for QA and for anything else on the page that wants the signal.
-window.bodyLight = { stats, signal, field, setMode, tracker, bodyU, startCamera, video };
+window.bodyLight = { stats, signal, field, setMode, tracker, bodyU, startCamera, video, useVideo };
 
 // ?video=url autoloads a clip (QA, or a saved link for a performance file).
 if (params.get('video')) useVideo(params.get('video'), 'file', false).catch((e) => flash(e.message, 5000));

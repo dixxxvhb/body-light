@@ -35,7 +35,7 @@ const IDX = {
 export const LIMBS = ['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot', 'core'];
 
 // Torso lengths per second that count as "fast" for each limb.
-const FAST = { head: 2.2, leftHand: 6, rightHand: 6, leftFoot: 4.5, rightFoot: 4.5, core: 2.2 };
+const FAST = { head: 3, leftHand: 8, rightHand: 8, leftFoot: 6, rightFoot: 6, core: 3 };
 
 const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
@@ -55,7 +55,7 @@ function limbPoint(lm, name) {
 }
 
 export class MovementSignal {
-  constructor({ hitThreshold = 1, hitCooldown = 0.18, mirror = false } = {}) {
+  constructor({ hitThreshold = 1, hitCooldown = 0.25, mirror = false } = {}) {
     this.hitThreshold = hitThreshold; // scales every limb's "fast" speed for hit detection
     this.hitCooldown = hitCooldown;
     this.mirror = mirror; // flip x in the output (useful when the screen is mirrored)
@@ -122,9 +122,12 @@ export class MovementSignal {
       const x = this.mirror ? 1 - p.x : p.x;
       const y = p.y;
       if (L.px == null || first) { L.px = x; L.py = y; }
-      const vx = (x - L.px) / dt;
-      const vy = (y - L.py) / dt;
+      let vx = (x - L.px) / dt;
+      let vy = (y - L.py) / dt;
       L.px = x; L.py = y;
+      // A jump no body can make (a video cut, a tracking glitch) is not
+      // movement: drop it instead of reporting a huge speed and a fake hit.
+      if (Math.hypot(vx, vy) / Math.max(this.torso, 1e-3) > 25) { vx = L.vx; vy = L.vy; L.peak = 0; }
       L.x = x; L.y = y;
       L.vx = ease(L.vx, vx, dt, 0.05);
       L.vy = ease(L.vy, vy, dt, 0.05);
@@ -137,9 +140,9 @@ export class MovementSignal {
 
       // A hit is a sharp stop: the limb was moving fast and then lost most of
       // its speed within ~150 ms. That is the accent a dancer would call a hit.
-      const fast = FAST[n] * this.hitThreshold * 0.6;
+      const fast = FAST[n] * this.hitThreshold * 0.8;
       if (L.speed > L.peak || t - L.peakT > 0.15) { L.peak = L.speed; L.peakT = t; }
-      if (L.peak > fast && L.speed < L.peak * 0.4 && t - L.lastHit > this.hitCooldown) {
+      if (L.peak > fast && L.speed < L.peak * 0.3 && t - L.lastHit > this.hitCooldown) {
         const mag = Math.hypot(L.vx, L.vy) || 1;
         hits.push({
           limb: n,
@@ -151,17 +154,17 @@ export class MovementSignal {
       }
     }
 
-    // Shaped so a walk is ~0.2 and full-out travelling is ~0.8+.
-    const rawEnergy = clamp01(Math.pow(energySum / energyW, 0.8) * 1.4);
+    // Shaped so a walk is ~0.2 and full-out dancing reaches ~0.8.
+    const rawEnergy = clamp01(energySum / energyW * 1.1);
     this.energy = ease(this.energy, rawEnergy, dt, rawEnergy > this.energy ? 0.08 : 0.35);
     this.slowEnergy = ease(this.slowEnergy, rawEnergy, dt, 0.8);
 
     // Expansion: average reach of hands, feet and head from the hip center,
-    // measured in torso lengths. ~1.0 is folded, ~2.4 is a full star.
+    // measured in body units. ~1.0 is folded, ~1.9 is a full star.
     const reach = ['head', 'leftHand', 'rightHand', 'leftFoot', 'rightFoot']
       .map((n) => Math.hypot(this.limbs[n].x - (this.mirror ? 1 - hipC.x : hipC.x), this.limbs[n].y - hipC.y) / T)
       .reduce((a, b) => a + b, 0) / 5;
-    this.expansion = ease(this.expansion, clamp01((reach - 1.0) / 1.4), dt, 0.15);
+    this.expansion = ease(this.expansion, clamp01((reach - 0.95) / 0.95), dt, 0.15);
 
     // Level: how far the hips sit above the ankles, against a standing leg.
     const ankC = mid(lm[IDX.lAnk], lm[IDX.rAnk]);

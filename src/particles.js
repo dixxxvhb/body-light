@@ -51,6 +51,13 @@ vec4 hash42(vec2 p) {
   return fract((p4.xxyz + p4.yzzw) * p4.zywx);
 }
 
+// Two independent normal samples from two uniforms (Box-Muller).
+vec2 gauss2(vec2 u) {
+  float r = sqrt(-2.0 * log(max(u.x, 1e-4)));
+  float a = 6.2831853 * u.y;
+  return r * vec2(cos(a), sin(a));
+}
+
 // Anchor: where on body b this particle lives, plus that point's velocity.
 void anchor(int b, vec4 rnd, out vec2 P, out vec2 V, out float rad, out float conf) {
   int base = b * NJ;
@@ -59,24 +66,24 @@ void anchor(int b, vec4 rnd, out vec2 P, out vec2 V, out float rad, out float co
   for (int i = 0; i < NSEG; i++) { if (rnd.x < SEG_CUM[i]) { seg = i; break; } }
   rad = SEG_R[seg] * S;
   if (seg == 0) {
-    // Soft, rounded torso: denser down the center line, tapering at the
-    // waist, no hard rectangle edges.
-    float v = mix(-0.05, 1.05, rnd.z);
-    float c = (rnd.y + fract(rnd.y * 7.31 + rnd.w)) - 1.0; // triangular, -1..1
-    float taper = mix(1.0, 0.72, smoothstep(0.35, 0.8, v)) * mix(0.82, 1.0, smoothstep(-0.05, 0.18, v));
-    float u = 0.5 + c * 0.62 * taper;
+    // Soft torso: Gaussian across the width (no hard rectangle edges),
+    // tapering at the waist and the shoulders.
+    vec2 g = gauss2(rnd.yw);
+    float v = clamp(rnd.z * 1.04 - 0.02 + g.y * 0.03, -0.08, 1.08);
+    float taper = mix(1.0, 0.75, smoothstep(0.35, 0.8, v)) * mix(0.8, 1.0, smoothstep(-0.05, 0.2, v));
+    float u = 0.5 + clamp(g.x * 0.23, -0.6, 0.6) * taper;
     vec4 top = mix(uJ[base + 2], uJ[base + 3], u);
     vec4 bot = mix(uJ[base + 10], uJ[base + 11], u);
     vec4 q = mix(top, bot, v);
     // A little depth to the edges so the torso is not a flat card.
-    P = q.xy + (rnd.w - 0.5) * vec2(0.06, 0.03) * S;
+    P = q.xy;
     V = q.zw;
     conf = min(min(uVis[base + 2], uVis[base + 3]), min(uVis[base + 10], uVis[base + 11]));
   } else if (seg == 1) {
     vec4 c = uJ[base];
     float a = rnd.y * 6.2831853;
-    float r = pow(rnd.z, 0.8) * rad; // a little denser toward the center, no hard rim
-    P = c.xy + vec2(cos(a), sin(a) * 1.18) * r;
+    vec2 gh = gauss2(rnd.zw) * 0.5;
+    P = c.xy + clamp(gh, -1.5, 1.5) * vec2(1.0, 1.18) * rad;
     V = c.zw;
     conf = uVis[base];
   } else {
@@ -87,8 +94,8 @@ void anchor(int b, vec4 rnd, out vec2 P, out vec2 V, out float rad, out float co
     vec2 d = B.xy - A.xy;
     float L = length(d);
     vec2 dir = L > 1e-5 ? d / L : vec2(0.0, 1.0);
-    float o = rnd.z * 2.0 - 1.0;
-    o = sign(o) * pow(abs(o), 1.35); // denser down the middle of the limb
+    // Gaussian across the limb: bright core, soft edge, no tube outline.
+    float o = clamp(gauss2(rnd.zw).x * 0.6, -1.6, 1.6);
     P = q.xy + vec2(-dir.y, dir.x) * o * rad;
     V = q.zw;
     conf = min(uVis[base + SEG_A[seg]], uVis[base + SEG_B[seg]]);
@@ -416,7 +423,7 @@ void main() {
   vec3 hp = fract(vec3(ref.xyx * 57.31 + 3.7) * 0.1031);
   hp += dot(hp, hp.yzx + 33.33);
   bool core = fract((hp.x + hp.y) * hp.z) < 0.3;
-  float base = core ? 0.6 : mix(0.5, 0.2, bond);
+  float base = core ? 0.6 : mix(0.68, 0.2, bond);
   float intensity = (kind == 4.0 ? 0.4 : base * freeDim) * fade / pow(vHalf, 0.75);
   vColor = palette(heat) * intensity * uGain * (kind < 4.0 ? uBodyGain[int(kind) - 1] : 1.0);
 }
@@ -438,9 +445,9 @@ void main() {
 `;
 
 export const MODES = [
-  { name: 'Flow', release: 1.1, releaseSpeed: 0.55, K: 150, C: 15, flowAmp: 0.24, flowScale: 1.4, flowDrag: 1.6, wake: 7, gravity: 0, life: [1.3, 3.4], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
+  { name: 'Flow', release: 1.1, releaseSpeed: 0.55, K: 150, C: 15, flowAmp: 0.24, flowScale: 1.4, flowDrag: 1.6, wake: 7, gravity: 0, life: [1.5, 4.0], hitKick: 0.45, hitRelease: 3, spawn: 1, freezeAge: 1 },
   { name: 'Gravity', release: 0.9, releaseSpeed: 0.6, K: 150, C: 15, flowAmp: 0.08, flowScale: 1.4, flowDrag: 0.5, wake: 4, gravity: 1.5, life: [1.8, 3.6], hitKick: 1.6, hitRelease: 3, spawn: 1, freezeAge: 1 },
-  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.7 },
+  { name: 'Burst', release: 0.22, releaseSpeed: 0.12, K: 190, C: 17, flowAmp: 0.22, flowScale: 1.6, flowDrag: 1.2, wake: 3, gravity: 0, life: [1.2, 3.2], hitKick: 4.5, hitRelease: 9, spawn: 1, freezeAge: 1, gain: 0.55 },
   { name: 'Freeze', release: 0.8, releaseSpeed: 0.5, K: 150, C: 15, flowAmp: 0.1, flowScale: 1.4, flowDrag: 1.0, wake: 0, gravity: 0, life: [1.6, 2.4], hitKick: 0.6, hitRelease: 2, spawn: 1, freezeAge: 0.2 },
 ];
 
